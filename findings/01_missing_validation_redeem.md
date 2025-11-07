@@ -1,40 +1,50 @@
-# 01_missing_validation_redeem
+[01] Missing Validation for Contract Address in redeem()
 
-**Título:** Falta de validação no resgate (Missing validation on redeem)
-**Severidade:** Alta
-**Status:** Draft
+Contract Name: Covenant.sol
 
-## Resumo
-O contrato permite que operações de resgate (redeem/claim) sejam executadas sem validação adequada dos parâmetros e permissões, o que pode levar a resgates não autorizados e perda de fundos.
+Function Name: redeem
 
-## Arquivo / Função afetada
-- <substituir pelo caminho real do contrato e função>
-- Função: redeem / claim
+Description:
+The redeem() function allows users to specify any address as the redemption recipient (redeemParams.to).
+However, the function does not prevent sending redeemed base tokens to the Covenant contract itself (address(this)).
+If a user sets to = address(this), the function transfers tokens to the contract while also decreasing marketState.baseSupply.
+This creates an accounting mismatch — the internal supply is reduced, but the actual ERC20 balance inside the contract does not decrease.
+Over time, this can desynchronize internal accounting, lead to locked funds, or disrupt later operations that depend on accurate balances.
 
-## Descrição
-A função de resgate não verifica corretamente se o chamador tem permissão para resgatar ou se os parâmetros estão dentro dos limites esperados. Como resultado, um invasor pode chamar a função com parâmetros manipulados para resgatar tokens/ativos indevidamente.
+Mitigation:
+Add a validation to prevent self-transfer before the base token transfer occurs:
 
-## Passos para reproduzir
-1. Chamar redeem(...) com parâmetros forjados (ex.: destinatário diferente, valores fora de intervalo).
-2. Observar que a operação completa sem rejeição e fundos são transferidos.
+if (redeemParams.to == address(this)) revert Errors.E_Unauthorized();
+IERC20(mp.baseToken).safeTransfer(redeemParams.to, amountOut);
+Impact:
+Incorrect internal accounting and potential fund locking within the contract.
 
-> Substitua estes passos por um PoC específico assim que o caminho/função real forem identificados.
+[02] Unnecessary State Write and Event Emission in setDefaultFee
 
-## Impacto
-Resgate não autorizado de fundos, perda de saldo dos usuários, comprometimento financeiro.
+Contract Name: Covenant.sol
 
-## Recomendação / Correção
-- Validar msg.sender contra lista de autorizados (ou usar access control adequado).
-- Verificar saldos antes de transferir.
-- Validar ranges e limites dos parâmetros de entrada.
-- Usar modifiers e revisar lógica de transferência/contabilidade.
+Function Name: setDefaultFee
 
-## PoC (exemplo genérico)
-// Exemplo: chamar redeem(to, amount) com to = atacante e amount > 0
+Description:
+The setDefaultFee() function updates _defaultProtocolFee and emits an event even when the new fee value is identical to the current one.
 
-## Referências
-- [Checklist de auditoria interna]
+_defaultProtocolFee = newFee;
+emit Events.UpdateDefaultProtocolFee(oldFee, newFee);
+When newFee == _defaultProtocolFee, this results in:
 
-## Observações
-- Prioridade: Alta
-- Atualizar o campo "Arquivo / Função afetada" com o caminho real do contrato após busca no repositório.
+A redundant storage write (SSTORE) that consumes unnecessary gas.
+
+A redundant event emission, generating noise in off-chain logs.
+
+This has no functional impact but introduces avoidable inefficiency.
+
+Mitigation:
+Add a conditional check to skip the write and event emission if the fee remains unchanged:
+
+if (newFee == _defaultProtocolFee) return;
+
+uint32 oldFee = _defaultProtocolFee;
+_defaultProtocolFee = newFee;
+emit Events.UpdateDefaultProtocolFee(oldFee, newFee);
+Impact:
+Minor gas overhead and unnecessary log entries without affecting functionality.
